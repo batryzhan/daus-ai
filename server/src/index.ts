@@ -5,6 +5,7 @@ import cors from 'cors';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
+import { Redis } from '@upstash/redis';
 
 const app = express();
 app.use(cors(process.env.CORS_ORIGIN ? { origin: process.env.CORS_ORIGIN.split(',').map(v=>v.trim()) } : undefined));
@@ -13,6 +14,9 @@ const PORT = Number(process.env.PORT) || 3000;
 type Stone = { id: string; color: string; colorName: string; position: string; positionName: string; x: number; y: number; size: number };
 type Round = { targetId: string; answered: boolean; result?: { correct: boolean; points: number; targetId: string } };
 const rounds = new Map<string, Round>();
+const redisUrl = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+const redisToken = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+const redis = redisUrl && redisToken ? new Redis({url:redisUrl, token:redisToken}) : null;
 const analyzeHits = new Map<string, { count:number; start:number }>();
 const stones: Stone[] = [
   {id:'blue-center',color:'#496f80',colorName:'көк',position:'ортасында',positionName:'ортада',x:50,y:48,size:54},
@@ -24,19 +28,36 @@ const stones: Stone[] = [
   {id:'blue-bottom-left',color:'#496f80',colorName:'көк',position:'төменгі сол жақта',positionName:'төменгі сол жақта',x:29,y:84,size:38},
 ];
 app.get('/api/health', (_req,res) => res.json({status:'ok', aiConfigured:Boolean(process.env.GROQ_API_KEY)}));
-app.post('/api/game/round', (_req,res) => {
+app.post('/api/game/round', async (_req,res) => {
   const id = randomUUID(); const target = stones[0];
-  rounds.set(id,{targetId:target.id,answered:false});
+  try {
+    if (redis) await redis.set(`round:${id}`, target.id, {ex: 3600});
+    else if (process.env.VERCEL) return res.status(503).json({error:'Ойын деректер қоймасы бапталмаған.'});
+    else rounds.set(id,{targetId:target.id,answered:false});
+  } catch { return res.status(503).json({error:'Ойын серверіне қосыла алмадық.'}); }
   res.json({id,stones,target:{id:target.id,color:target.colorName,position:target.position}, targetId:target.id});
 });
-app.post('/api/game/round/:id/answer', (req,res) => {
-  const round=rounds.get(req.params.id); const choice=req.body?.choiceId;
-  if (!round) return res.status(404).json({error:'Бұл раунд табылмады. Жаңа раунд бастаңыз.'});
-  if (round.answered) return res.status(409).json({error:'Бұл раундқа жауап беріліп қойды.'});
+app.post('/api/game/round/:id/answer', async (req,res) => {
+  const choice=req.body?.choiceId;
   if (typeof choice!=='string' || !stones.some(s=>s.id===choice)) return res.status(400).json({error:'Асықты таңдаңыз.'});
-  const correct=choice===round.targetId; round.answered=true; round.result={correct,points:correct?1:0,targetId:round.targetId};
-  const target=stones.find(s=>s.id===round.targetId)!;
-  res.json({correct,points:round.result.points,targetId:round.targetId,target:{color:target.colorName,position:target.position}});
+  let targetId: string;
+  try {
+    if (redis) {
+      const result = await redis.eval<[], number>("local v = redis.call('GET', KEYS[1]); if not v then return 0 end; if v == 'answered' then return -1 end; redis.call('SET', KEYS[1], 'answered', 'KEEPTTL'); return 1", [`round:${req.params.id}`], []);
+      if (result === 0) return res.status(404).json({error:'Бұл раунд табылмады. Жаңа раунд бастаңыз.'});
+      if (result === -1) return res.status(409).json({error:'Бұл раундқа жауап беріліп қойды.'});
+      targetId = stones[0].id;
+    } else {
+      if (process.env.VERCEL) return res.status(503).json({error:'Ойын деректер қоймасы бапталмаған.'});
+      const round=rounds.get(req.params.id);
+      if (!round) return res.status(404).json({error:'Бұл раунд табылмады. Жаңа раунд бастаңыз.'});
+      if (round.answered) return res.status(409).json({error:'Бұл раундқа жауап беріліп қойды.'});
+      round.answered=true; targetId=round.targetId;
+    }
+  } catch { return res.status(503).json({error:'Ойын серверіне қосыла алмадық.'}); }
+  const correct=choice===targetId;
+  const target=stones.find(s=>s.id===targetId)!;
+  res.json({correct,points:correct?1:0,targetId,target:{color:target.colorName,position:target.position}});
 });
 app.post('/api/instruction/analyze', async (req,res) => {
   const ip=req.ip || req.socket.remoteAddress || 'unknown'; const now=Date.now(); const hits=analyzeHits.get(ip);
@@ -58,7 +79,8 @@ app.post('/api/instruction/analyze', async (req,res) => {
 speechRoutes(app);
 const clientDist=path.resolve(process.cwd(),'dist');
 if(fs.existsSync(clientDist)){app.use(express.static(clientDist));app.get('*',(req,res,next)=>req.path.startsWith('/api/')?next():res.sendFile(path.join(clientDist,'index.html')));}
-app.listen(PORT,()=>console.log(`Daus AI server listening on ${PORT}`));
+if (!process.env.VERCEL) app.listen(PORT,()=>console.log(`Daus AI server listening on ${PORT}`));
+export default app;
 
 
 
