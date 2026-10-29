@@ -1,3 +1,4 @@
+import { speechRoutes } from './speech.js';
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -22,7 +23,7 @@ const stones = [
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', aiConfigured: Boolean(process.env.GROQ_API_KEY) }));
 app.post('/api/game/round', (_req, res) => {
     const id = randomUUID();
-    const target = stones[Math.floor(Math.random() * stones.length)];
+    const target = stones[0];
     rounds.set(id, { targetId: target.id, answered: false });
     res.json({ id, stones, target: { id: target.id, color: target.colorName, position: target.position }, targetId: target.id });
 });
@@ -78,6 +79,7 @@ app.post('/api/instruction/analyze', async (req, res) => {
         clearTimeout(timer);
     }
 });
+speechRoutes(app);
 const clientDist = path.resolve(process.cwd(), 'dist');
 if (fs.existsSync(clientDist)) {
     app.use(express.static(clientDist));

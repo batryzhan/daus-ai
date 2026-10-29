@@ -1,3 +1,4 @@
+import {speechRoutes} from './speech.js';
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -24,7 +25,7 @@ const stones: Stone[] = [
 ];
 app.get('/api/health', (_req,res) => res.json({status:'ok', aiConfigured:Boolean(process.env.GROQ_API_KEY)}));
 app.post('/api/game/round', (_req,res) => {
-  const id = randomUUID(); const target = stones[Math.floor(Math.random()*stones.length)];
+  const id = randomUUID(); const target = stones[0];
   rounds.set(id,{targetId:target.id,answered:false});
   res.json({id,stones,target:{id:target.id,color:target.colorName,position:target.position}, targetId:target.id});
 });
@@ -54,7 +55,10 @@ app.post('/api/instruction/analyze', async (req,res) => {
     res.json({instruction_clear:parsed.instruction_clear,mentioned_color:typeof parsed.mentioned_color==='string'?parsed.mentioned_color:null,mentioned_position:typeof parsed.mentioned_position==='string'?parsed.mentioned_position:null,language_feedback_kk:parsed.language_feedback_kk.slice(0,240),suggested_instruction_kk:parsed.suggested_instruction_kk.slice(0,240)});
   } catch(error) {res.status(502).json({error:error instanceof Error&&error.name==='AbortError'?'AI талдауы уақытында жауап бермеді.':'AI жауабын оқу мүмкін болмады.'});} finally {clearTimeout(timer);}
 });
+speechRoutes(app);
 const clientDist=path.resolve(process.cwd(),'dist');
 if(fs.existsSync(clientDist)){app.use(express.static(clientDist));app.get('*',(req,res,next)=>req.path.startsWith('/api/')?next():res.sendFile(path.join(clientDist,'index.html')));}
 app.listen(PORT,()=>console.log(`Daus AI server listening on ${PORT}`));
+
+
 
